@@ -33,7 +33,7 @@ jobs:
             asset: windows-x64.zip
             sha256: e30cfa398c0362cef4b8f311cf5496743920b6d3a6c4a6d818fc47ee1e56be7d
             suffix: .exe
-          - os: macos-14
+          - os: macos-15
             asset: macos-arm64.tar.gz
             sha256: 2ffaaf46b3edde27aed03fcd9ebe73e9b6639cac30d8a6915f7dc00795b7aedf
             suffix: ''
