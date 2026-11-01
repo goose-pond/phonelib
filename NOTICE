@@ -1,0 +1,9 @@
+Numbering-plan data adapted from Google libphonenumber.
+Copyright (C) 2009 The Libphonenumber Authors.
+Licensed under Apache License 2.0; see LICENSE.libphonenumber.
+Source commit: 1ae0d623301b302f828628dfc368c983e8d27141.
+Changes: generated decimal DFA tables, length masks, and prefix-parsing table.
+
+Country names and territory-prefix conventions adapted from Rust phonelib.
+Copyright (c) 2023 Mohamad Al Zohbie.
+Licensed under the MIT License; see LICENSE.rust-phonelib.

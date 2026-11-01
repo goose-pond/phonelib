@@ -1,0 +1,4 @@
+* text=auto eol=lf
+*.bin binary
+# Preserve the exact bytes verified by the metadata SHA-256 pin.
+metadata/libphonenumber/PhoneNumberMetadata.xml -text

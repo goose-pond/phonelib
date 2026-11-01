@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            asset: linux-x64.tar.gz
+            sha256: 06ac30284338269d3996d457412bf4f2b47c1f9a5601de65b6317187fe78d5c9
+            suffix: ''
+          - os: windows-2022
+            asset: windows-x64.zip
+            sha256: e30cfa398c0362cef4b8f311cf5496743920b6d3a6c4a6d818fc47ee1e56be7d
+            suffix: .exe
+          - os: macos-14
+            asset: macos-arm64.tar.gz
+            sha256: 2ffaaf46b3edde27aed03fcd9ebe73e9b6639cac30d8a6915f7dc00795b7aedf
+            suffix: ''
+          - os: macos-15-intel
+            asset: macos-x64.tar.gz
+            sha256: 3c7f2895f3dcab5f39ee52808446b00688b975620d1d27e23694dd22b82abfe7
+            suffix: ''
+    env:
+      EXE_SUFFIX: ${{ matrix.suffix }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Install Goose
+        env:
+          GOOSE_ASSET: ${{ matrix.asset }}
+          GOOSE_SHA256: ${{ matrix.sha256 }}
+        run: |
+          $directory = Join-Path $env:RUNNER_TEMP 'goose'
+          New-Item -ItemType Directory -Path $directory -Force | Out-Null
+          $filename = "goose-v2026.3-$env:GOOSE_ASSET"
+          $archive = Join-Path $directory $filename
+          Invoke-WebRequest "https://github.com/aardappel/goose/releases/download/v2026.3/$filename" -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $env:GOOSE_SHA256) {
+            throw 'Goose release checksum mismatch'
+          }
+          if ($filename.EndsWith('.zip')) {
+            Expand-Archive -LiteralPath $archive -DestinationPath $directory
+          } else {
+            tar -xzf $archive -C $directory
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          $compiler = @(Get-ChildItem $directory -Recurse -File -Filter "goose$env:EXE_SUFFIX")
+          if ($compiler.Count -ne 1) { throw 'Expected exactly one compiler executable' }
+          $compiler[0].DirectoryName | Out-File $env:GITHUB_PATH -Append -Encoding utf8
+      - name: Verify metadata source
+        run: |
+          $source = Get-Content metadata/libphonenumber/source.json -Raw | ConvertFrom-Json
+          $actual = (Get-FileHash metadata/libphonenumber/PhoneNumberMetadata.xml -Algorithm SHA256).Hash
+          if ($actual -ne $source.sha256) { throw 'Metadata source checksum mismatch' }
+      - name: Test and build
+        run: |
+          function Invoke-Checked {
+            param([string]$Program, [string[]]$Arguments)
+            & $Program @Arguments
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          Invoke-Checked goose @('version')
+          Invoke-Checked goose @('check', 'examples/basic.goose')
+          Invoke-Checked goose @('check', 'tests/phonelib_test.goose')
+          Invoke-Checked goose @('run', 'examples/basic.goose')
+          Invoke-Checked goose @('run', 'tests/phonelib_test.goose', '-O0', '--debug', '--no-bce')
+          Invoke-Checked goose @('run', 'tests/phonelib_test.goose', '-O2')
+          $debug = Join-Path $env:GITHUB_WORKSPACE "build/test-debug$env:EXE_SUFFIX"
+          $release = Join-Path $env:GITHUB_WORKSPACE "build/test-release$env:EXE_SUFFIX"
+          Invoke-Checked goose @('build', 'tests/phonelib_test.goose', '--debug', '--no-bce', '-o', $debug)
+          Invoke-Checked goose @('build', 'tests/phonelib_test.goose', '-O2', '-o', $release)
+          Push-Location $env:RUNNER_TEMP
+          try {
+            Invoke-Checked $debug @()
+            Invoke-Checked $release @()
+            $library = $env:GITHUB_WORKSPACE.Replace('\', '/')
+            $consumer = Join-Path $env:RUNNER_TEMP 'phonelib-consumer.goose'
+            $program = @"
+          import phonelib from "$library";
+          fn main() {
+              var out: u8[>..] = [];
+              assert(phonelib::normalize_with_country("01123456", "LB", out));
+              assert(out == "+9611123456");
+              assert(!phonelib::is_valid_phone_number("+440000000000"));
+          }
+          "@
+            [IO.File]::WriteAllText($consumer, $program)
+            Invoke-Checked goose @('run', $consumer, '--debug')
+          } finally { Pop-Location }

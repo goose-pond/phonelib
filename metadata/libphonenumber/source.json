@@ -1,0 +1,6 @@
+{
+  "repository": "https://github.com/google/libphonenumber",
+  "commit": "1ae0d623301b302f828628dfc368c983e8d27141",
+  "path": "resources/PhoneNumberMetadata.xml",
+  "sha256": "b6491939ddaeb9d585a34fe0f0ebd096e83c5ac9a1c5d6dddf38ba4b162b28ca"
+}
