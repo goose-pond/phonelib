@@ -41,7 +41,8 @@ struct PhoneSpan {
     end: i64,
 }
 
-enum PhoneFormat { E164, International, National, RFC3966 }
+// National is retained for compatibility; prefer the explicit NationalDigits.
+enum PhoneFormat { E164, International, National, RFC3966, NationalDigits }
 
 fn empty_country() -> Country {
     Country {
@@ -298,6 +299,16 @@ fn parse_phone_number(text: const u8[:]) -> PhoneNumber, bool {
     return number, ok;
 }
 
+// Apply national-prefix rules before parsing. Explicit international notation
+// takes precedence over the hint, just as it does for normalization.
+fn parse_with_country(text: const u8[:], iso_code: const u8[:]) -> PhoneNumber, bool {
+    var normalized: u8[>..] = [];
+    if !normalize_with_country(text, iso_code, normalized) {
+        return empty_phone_number(), false;
+    }
+    return parse_phone_number(normalized);
+}
+
 // Length-only possibility is deliberately separate from prefix validation.
 fn is_possible_phone_number(text: const u8[:]) -> bool {
     let number, ok = parse_number(text, false);
@@ -326,24 +337,57 @@ fn calling_code_from_phone_number(text: const u8[:]) -> i64, bool {
     return number.country.calling_code, true;
 }
 
-fn format_parsed_phone_number(number: PhoneNumber, format: PhoneFormat, out: u8[>..]&) {
+// Internal formatting step: callers must validate the model before appending.
+fn append_formatted_number(number: PhoneNumber, format: PhoneFormat, out: u8[>..]&) {
+    let national = format == PhoneFormat.NationalDigits || format == PhoneFormat.National;
     if format == PhoneFormat.RFC3966 { out.append("tel:"); }
-    if format != PhoneFormat.National { out.push('+'); }
+    if !national { out.push('+'); }
     if format == PhoneFormat.International {
         format_int(out, number.country.calling_code, 10, 0, '0');
         out.push(' ');
         out.append(number.digits[number.calling_code_length..number.digit_count]);
-    } else if format == PhoneFormat.National {
+    } else if national {
         out.append(number.digits[number.calling_code_length..number.digit_count]);
     } else {
         out.append(number.digits[..number.digit_count]);
     }
 }
 
+// Public models are mutable. Reject invalid bounds before slicing, then check
+// that the digits and metadata still describe a canonical parsed number.
+fn try_format_parsed_phone_number(number: PhoneNumber, format: PhoneFormat, out: u8[>..]&) -> bool {
+    if number.digit_count <= 0 || number.digit_count > number.digits.len ||
+       number.calling_code_length <= 0 || number.calling_code_length > 3 ||
+       number.calling_code_length >= number.digit_count { return false; }
+    var text: u8[20] = [0; 20];
+    text[0] = '+';
+    for i in number.digit_count {
+        if !is_ascii_digit(number.digits[i]) { return false; }
+        text[i + 1] = number.digits[i];
+    }
+    let canonical, ok = parse_phone_number(text[..number.digit_count + 1]);
+    if !ok || number.calling_code_length != canonical.calling_code_length ||
+       number.country.code != canonical.country.code ||
+       number.country.name != canonical.country.name ||
+       number.country.calling_code != canonical.country.calling_code ||
+       number.country.e164_prefix != canonical.country.e164_prefix ||
+       number.country.length_mask != canonical.country.length_mask ||
+       number.country.global_service != canonical.country.global_service ||
+       number.country_is_ambiguous != canonical.country_is_ambiguous { return false; }
+    append_formatted_number(canonical, format, out);
+    return true;
+}
+
+// Compatibility entry point. Use try_format_parsed_phone_number to inspect
+// failure; both leave the output unchanged for a malformed model.
+fn format_parsed_phone_number(number: PhoneNumber, format: PhoneFormat, out: u8[>..]&) {
+    let ok = try_format_parsed_phone_number(number, format, out);
+}
+
 fn format_phone_number(text: const u8[:], format: PhoneFormat, out: u8[>..]&) -> bool {
     let number, ok = parse_phone_number(text);
     if !ok { return false; }
-    format_parsed_phone_number(number, format, out);
+    append_formatted_number(number, format, out);
     return true;
 }
 
@@ -354,6 +398,12 @@ fn normalize_phone_number(text: const u8[:], out: u8[>..]&) -> bool {
 fn normalized_phone_number(text: const u8[:]) -> u8[>..], bool {
     var out: u8[>..] = [];
     if !normalize_phone_number(text, out) { return out, false; }
+    return out, true;
+}
+
+fn normalized_with_country(text: const u8[:], iso_code: const u8[:]) -> u8[>..], bool {
+    var out: u8[>..] = [];
+    if !normalize_with_country(text, iso_code, out) { return out, false; }
     return out, true;
 }
 
@@ -437,4 +487,10 @@ fn extract_phone_numbers_from_text(text: const u8[:], out: PhoneSpan[>..]&) -> i
         i = end;
     }
     return out.len - old_length;
+}
+
+fn extracted_phone_numbers_from_text(text: const u8[:]) -> PhoneSpan[>..] {
+    var spans: PhoneSpan[>..] = [];
+    let count = extract_phone_numbers_from_text(text, spans);
+    return spans;
 }

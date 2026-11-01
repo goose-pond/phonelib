@@ -261,8 +261,109 @@ fn test_reference_national() {
     while pos < REFERENCE_NATIONAL.len {
         let row, next = phonelib::data_row(REFERENCE_NATIONAL, pos);
         national(phonelib::field(row, 1), phonelib::field(row, 0), phonelib::field(row, 2));
+        let number, ok = phonelib::parse_with_country(phonelib::field(row, 1), phonelib::field(row, 0));
+        expect(ok, "country-hinted parsing accepts reference national input");
+        var output: u8[>..] = [];
+        expect(phonelib::try_format_parsed_phone_number(number, phonelib::PhoneFormat.E164, output),
+               "country-hinted parse produces a valid model");
+        expect(output == phonelib::field(row, 2), "country-hinted parsing preserves reference E.164 digits");
         pos = next;
     }
+}
+
+fn malformed_model(number: phonelib::PhoneNumber) {
+    let formats = [phonelib::PhoneFormat.E164, phonelib::PhoneFormat.International,
+                   phonelib::PhoneFormat.National, phonelib::PhoneFormat.RFC3966,
+                   phonelib::PhoneFormat.NationalDigits];
+    for format in formats {
+        var output: u8[>..] = [];
+        output.append("keep:");
+        expect(!phonelib::try_format_parsed_phone_number(number, format, output), "reject malformed parsed model");
+        expect(output == "keep:", "checked formatter preserves output on failure");
+        phonelib::format_parsed_phone_number(number, format, output);
+        expect(output == "keep:", "compatibility formatter safely rejects malformed model");
+    }
+}
+
+fn test_convenience_and_model_safety() {
+    let national_number, national_ok = phonelib::parse_with_country("01 234 567", "LB");
+    expect(national_ok && national_number.country.code == "LB", "parse national input with country");
+    let canada, canada_ok = phonelib::parse_with_country("+15062345678", "ZZ");
+    expect(canada_ok && canada.country.code == "CA", "explicit international input overrides unknown hint");
+    let uk, uk_ok = phonelib::parse_with_country("00442079460958", "LB");
+    expect(uk_ok && uk.country.code == "GB", "00 notation overrides hint");
+    let shared, shared_ok = phonelib::parse_with_country("8002345678", "CA");
+    expect(shared_ok && shared.country_is_ambiguous, "a hint does not erase shared-number ambiguity");
+    let missing, missing_ok = phonelib::parse_with_country("01 234 567", "ZZ");
+    expect(!missing_ok && missing.digit_count == 0 && missing.country.code == "", "unknown national hint returns empty model");
+    let bad, bad_ok = phonelib::parse_with_country("not a number", "LB");
+    expect(!bad_ok && bad.digit_count == 0, "invalid national input returns empty model");
+    let italian, italian_ok = phonelib::normalized_with_country("0212345678", "IT");
+    expect(italian_ok && italian == "+390212345678", "allocating normalization retains Italian zero");
+    let invalid_output, invalid_ok = phonelib::normalized_with_country("bad", "LB");
+    expect(!invalid_ok && invalid_output.len == 0, "allocating normalization fails empty");
+    formatted("+442079460958", phonelib::PhoneFormat.NationalDigits, "2079460958");
+    formatted("+442079460958", phonelib::PhoneFormat.National, "2079460958");
+    formatted("+390212345678", phonelib::PhoneFormat.NationalDigits, "0212345678");
+
+    let text = "Call +1 202-555-0173 or +44 20 7946 0958.";
+    let spans = phonelib::extracted_phone_numbers_from_text(text);
+    expect(spans.len == 2, "allocating extraction finds both numbers");
+    if spans.len == 2 {
+        expect(text[spans[0].start..spans[0].end] == "+1 202-555-0173", "allocated first span");
+        expect(text[spans[1].start..spans[1].end] == "+44 20 7946 0958", "allocated second span");
+    }
+    let no_spans = phonelib::extracted_phone_numbers_from_text("no numbers here");
+    expect(no_spans.len == 0, "empty allocating extraction");
+
+    let original, original_ok = phonelib::parse_phone_number("+442079460958");
+    expect(original_ok, "valid model before mutation tests");
+    var output: u8[>..] = [];
+    output.append("keep:");
+    expect(phonelib::try_format_parsed_phone_number(original, phonelib::PhoneFormat.International, output), "valid checked formatting");
+    expect(output == "keep:+44 2079460958", "checked formatting appends");
+    var changed = original;
+    changed.digit_count = 16;
+    malformed_model(changed);
+    changed = original;
+    changed.digit_count = -1;
+    malformed_model(changed);
+    changed = original;
+    changed.digit_count = 0;
+    malformed_model(changed);
+    for length in [-1, 0, 1, 4, 16] {
+        changed = original;
+        changed.calling_code_length = length;
+        malformed_model(changed);
+    }
+    changed = original;
+    changed.digits[0] = 'x';
+    malformed_model(changed);
+    changed = original;
+    for i in changed.digit_count { changed.digits[i] = '0'; }
+    malformed_model(changed);
+    changed = original;
+    changed.country.calling_code = 1;
+    malformed_model(changed);
+    changed = original;
+    changed.country.code = "US";
+    malformed_model(changed);
+    changed = original;
+    changed.country.e164_prefix = 1;
+    malformed_model(changed);
+    changed = original;
+    changed.country.name = "modified";
+    malformed_model(changed);
+    changed = original;
+    changed.country.length_mask = 0;
+    malformed_model(changed);
+    changed = original;
+    changed.country.global_service = true;
+    malformed_model(changed);
+    changed = original;
+    changed.country_is_ambiguous = true;
+    malformed_model(changed);
+    malformed_model(phonelib::empty_phone_number());
 }
 
 fn test_reference_examples() {
@@ -273,6 +374,12 @@ fn test_reference_examples() {
         let iso = phonelib::field(row, 0);
         let input = phonelib::field(row, 2);
         normalized(input, input);
+        let parsed, parsed_ok = phonelib::parse_phone_number(input);
+        expect(parsed_ok, "reference example parses to a model");
+        var formatted: u8[>..] = [];
+        expect(phonelib::try_format_parsed_phone_number(parsed, phonelib::PhoneFormat.E164, formatted),
+               "checked formatter accepts reference model");
+        expect(formatted == input, "checked formatter preserves reference digits");
         expect(phonelib::is_valid_phone_number(input), "upstream example validates");
         let code, code_ok = phonelib::calling_code_from_phone_number(input);
         if iso != "001" && code_ok {
@@ -308,6 +415,7 @@ fn test_reference_validation() {
 }
 
 fn main() {
+    test_convenience_and_model_safety();
     test_metadata();
     test_parsing();
     test_extraction();

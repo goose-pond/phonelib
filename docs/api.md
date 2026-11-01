@@ -7,6 +7,7 @@ views; output buffers are caller-owned `u8[>..]` arrays passed by reference.
 
 ```goose
 fn parse_phone_number(text: const u8[:]) -> PhoneNumber, bool
+fn parse_with_country(text: const u8[:], iso_code: const u8[:]) -> PhoneNumber, bool
 fn is_valid_phone_number(text: const u8[:]) -> bool
 fn is_possible_phone_number(text: const u8[:]) -> bool
 ```
@@ -28,6 +29,14 @@ prefixes or rewrite digits.
 
 On failure, parsing returns an empty `PhoneNumber` and `false`.
 
+`parse_with_country` applies the same national-prefix rules as
+`normalize_with_country` and returns the parsed E.164 number directly. For example,
+`parse_with_country("01 234 567", "LB")` returns a number whose country is `LB`.
+Explicit `+` or `00` notation takes precedence over the hint. Unknown or lowercase
+hints fail for national input. A hint guides normalization; it does not force the
+returned country or suppress ambiguity for shared ranges. The result uses the
+same country resolution as `parse_phone_number`.
+
 ```goose
 struct PhoneNumber {
     digits: u8[15],
@@ -47,12 +56,14 @@ NANP numbers, including territories with a longer `Country.e164_prefix`.
 ```goose
 fn normalize_phone_number(text: const u8[:], out: u8[>..]&) -> bool
 fn normalized_phone_number(text: const u8[:]) -> u8[>..], bool
+fn normalized_with_country(text: const u8[:], iso_code: const u8[:]) -> u8[>..], bool
 fn normalize_with_country(text: const u8[:], iso_code: const u8[:], out: u8[>..]&) -> bool
 ```
 
 Successful normalization produces `+` followed by the E.164 digits.
 Buffer-taking functions append their result. Failure leaves the buffer
-unchanged; `normalized_phone_number` instead returns an empty array and `false`.
+unchanged; both allocating variants instead return an empty array and `false`.
+`normalized_with_country` is the allocating form of `normalize_with_country`.
 
 `normalize_with_country` accepts an uppercase regional code such as `GB`,
 `LB`, or `US`. A valid national significant number is preserved. Otherwise,
@@ -131,10 +142,11 @@ lookups return an empty country or zero calling code, together with `false`.
 ## Format
 
 ```goose
-enum PhoneFormat { E164, International, National, RFC3966 }
+enum PhoneFormat { E164, International, National, RFC3966, NationalDigits }
 
 fn format_phone_number(text: const u8[:], format: PhoneFormat, out: u8[>..]&) -> bool
 fn format_parsed_phone_number(number: PhoneNumber, format: PhoneFormat, out: u8[>..]&)
+fn try_format_parsed_phone_number(number: PhoneNumber, format: PhoneFormat, out: u8[>..]&) -> bool
 ```
 
 For `+12684641234`:
@@ -143,16 +155,24 @@ For `+12684641234`:
 | --- | --- |
 | `E164` | `+12684641234` |
 | `International` | `+1 2684641234` |
-| `National` | `2684641234` |
+| `NationalDigits` | `2684641234` |
 | `RFC3966` | `tel:+12684641234` |
 
-`National` means the ungrouped national significant number, including a NANP
+`NationalDigits` means the ungrouped national significant number, including a NANP
 area code. It does not add a trunk prefix. `International` adds one space
 after the calling code; neither format implements national grouping rules.
 
-Both functions append. `format_phone_number` returns false without changing
-the output if parsing fails. Pass only an unchanged result from a successful
-parse to `format_parsed_phone_number`; it does not revalidate model fields.
+For example, `NationalDigits` formats `+442079460958` as `2079460958`, not
+`020 7946 0958`. `National` retains the same behavior for compatibility;
+prefer `NationalDigits` in new code. Existing enum values are unchanged.
+
+All formatting functions append. `format_phone_number` returns false without
+changing the output if parsing fails. `try_format_parsed_phone_number` validates
+the digit bounds, number, and metadata before appending. It returns false and
+leaves the output unchanged for invalid digits or inconsistent model fields.
+The original `format_parsed_phone_number` performs the same checks but has no return value.
+Pass an unchanged result from either parsing function. Checked model formatting
+revalidates the number; it is not a way to bypass validation.
 
 ## Extract from text
 
@@ -160,6 +180,7 @@ parse to `format_parsed_phone_number`; it does not revalidate model fields.
 struct PhoneSpan { start: i64, end: i64 }
 
 fn extract_phone_numbers_from_text(text: const u8[:], out: PhoneSpan[>..]&) -> i64
+fn extracted_phone_numbers_from_text(text: const u8[:]) -> PhoneSpan[>..]
 ```
 
 Appends valid international candidates beginning with `+` or `00`, returning
@@ -170,6 +191,10 @@ separators but excluding trailing punctuation.
 Candidates attached directly to ASCII letters, digits, or underscores are
 rejected. This is an ASCII boundary rule, not Unicode word segmentation.
 National-format numbers require a country hint and are not extracted.
+
+`extracted_phone_numbers_from_text` returns an owned array of the same spans,
+or an empty array when no valid candidates are found. The input text is not copied;
+the offsets still refer to the original text.
 
 ## Verification limits
 

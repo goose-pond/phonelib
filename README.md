@@ -7,26 +7,26 @@ data files to deploy, or native dependencies beyond Goose's standard library.
 ## Use
 
 Requires [Goose v2026.3](https://github.com/aardappel/goose/releases/tag/v2026.3).
-The import below targets the planned `v0.1.0` release. Until it is published,
-use the local-checkout import described below. Declare the package in your
-program's root file:
+Declare the package in your program's root file:
 
 ```goose
-import phonelib from "goose-pond/phonelib@v0.1.0";
+import phonelib from "goose-pond/phonelib@main";
 
 fn main() {
-    var number: u8[>..] = [];
-    if phonelib::normalize_with_country("020 7946 0958", "GB", number) {
-        print(number); // +442079460958
-    }
+    let number, ok = phonelib::normalized_phone_number("+961 1 234 567");
+    if ok { print(number); } // +9611234567
 
-    let country, found = phonelib::country_from_phone_number("+15062345678");
-    if found { print(country.code); } // CA
+    let parsed, found = phonelib::parse_with_country("01 234 567", "LB");
+    if found { print(parsed.country.code); } // LB
 }
 ```
 
-Run it with `goose run main.goose`. Goose fetches the pinned package on first
-use. For a local checkout, use `import phonelib from "path/to/phonelib";` with
+Run it with `goose run main.goose`. Goose fetches the package on first use.
+For reproducible builds, replace `main` with a full commit hash. No versioned
+release is available yet. While the repository is private, Git must authenticate
+with an account that has access.
+
+For a local checkout, use `import phonelib from "path/to/phonelib";` with
 an absolute path or a relative path beginning with `./` or `../`.
 
 ## Behavior
@@ -38,14 +38,15 @@ an absolute path or a relative path beginning with `./` or `../`.
   including Italy's, are preserved.
 - **Identify:** country lookup uses regional patterns. Shared ranges, such
   as NANP toll-free numbers, can remain ambiguous.
-- **Format:** E.164, a simple international format, national significant
-  digits, or an RFC 3966 `tel:` URI.
+- **Format:** E.164, a simple international format, `NationalDigits` (significant
+  digits without an added trunk prefix or grouping), or an RFC 3966 `tel:` URI.
 - **Extract:** find numbers beginning with `+` or `00`, returned as UTF-8 byte
   offsets into the original text.
 
-Output functions append to caller-owned buffers. Invalid input leaves the
-buffer unchanged. Functions that return a success flag also return an empty
-result on failure.
+Buffer-taking functions append and leave the buffer unchanged on failure.
+Convenience functions return owned arrays: `normalized_phone_number`,
+`normalized_with_country`, and `extracted_phone_numbers_from_text`.
+Failed parsing or allocating normalization returns an empty result and `false`.
 
 See the [API reference](docs/api.md) for signatures, examples, and input rules.
 
