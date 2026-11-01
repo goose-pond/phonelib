@@ -83,9 +83,9 @@ goose build tests/phonelib_test.goose -O2 -o build/test-release
 ./build/test-release
 ```
 
-CI is configured for Windows, Linux, and macOS. It verifies the metadata source checksum,
-typechecks the library, runs checked and optimized tests, and builds and runs
-native executables. Tests cover 1,143 upstream examples, 720 national-prefix
+CI runs one Linux job: it verifies the metadata source checksum, runs the example
+and checked tests, and builds and runs an optimized native executable from outside
+the checkout. Tests cover 1,143 upstream examples, 720 national-prefix
 cases, 12,099 validity fixtures, and regressions for normalization and extraction.
 
 Run `goose run examples/basic.goose` for a local example.
